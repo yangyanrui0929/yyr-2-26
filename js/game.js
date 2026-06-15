@@ -47,6 +47,7 @@ class UndergroundRadioGame {
             answeredQuestions: [],
             rumors: [],
             settlementHistory: [],
+            actionHistory: [],
             todayActions: {
                 broadcastDone: false,
                 qaDone: 0,
@@ -120,6 +121,8 @@ class UndergroundRadioGame {
             localStorage.removeItem('undergroundRadioSave');
             this.gameState = this.getDefaultState();
             this.generateDailyRumors();
+            document.getElementById('endDayBtn').disabled = false;
+            document.getElementById('gameOverModal').classList.remove('active');
             this.renderAll();
             this.showEvent('新游戏开始', '欢迎来到地下广播站！你的任务是维持广播运营，安抚民心，管理物资和幸存者。', []);
         }
@@ -150,6 +153,23 @@ class UndergroundRadioGame {
         });
 
         document.getElementById('modalCloseBtn').addEventListener('click', () => this.closeModal());
+        document.getElementById('gameOverCloseBtn').addEventListener('click', () => {
+            document.getElementById('gameOverModal').classList.remove('active');
+        });
+        document.getElementById('gameOverRestartBtn').addEventListener('click', () => {
+            document.getElementById('gameOverModal').classList.remove('active');
+            this.resetGame();
+        });
+
+        document.querySelectorAll('.game-over-tab').forEach(tab => {
+            tab.addEventListener('click', (e) => {
+                document.querySelectorAll('.game-over-tab').forEach(t => t.classList.remove('active'));
+                document.querySelectorAll('.snapshot-pane').forEach(p => p.classList.remove('active'));
+                
+                e.target.classList.add('active');
+                document.getElementById('snapshot-' + e.target.dataset.snapshot).classList.add('active');
+            });
+        });
     }
 
     switchTab(tabName) {
@@ -678,6 +698,221 @@ class UndergroundRadioGame {
         }
     }
 
+    recordDailyActions() {
+        const schedule = this.gameState.schedule;
+        const todayActions = this.gameState.todayActions;
+        const equipment = this.gameState.equipment;
+        const rumors = this.gameState.rumors;
+        const thresholds = this.gameState.thresholds;
+        const status = this.gameState.status;
+
+        const programsUsed = [];
+        ['morning', 'afternoon', 'evening'].forEach(slot => {
+            if (schedule[slot]) {
+                programsUsed.push(schedule[slot]);
+            }
+        });
+
+        const emergencyCount = programsUsed.filter(p => p === 'emergency').length;
+        const silentCount = programsUsed.filter(p => p === 'silent').length;
+        const highPowerPrograms = programsUsed.filter(p => {
+            const prog = GameData.programTypes.find(pr => pr.id === p);
+            return prog && prog.power >= 10;
+        }).length;
+
+        const avgEquipmentCondition = equipment.reduce((sum, eq) => sum + eq.condition, 0) / equipment.length;
+        const brokenEquipment = equipment.filter(eq => eq.condition <= 20).length;
+        const unrepairedCount = equipment.filter(eq => eq.condition < 100).length - todayActions.repairDone.length;
+
+        const activeRumors = rumors.length;
+        const highSeverityRumors = rumors.filter(r => r.severity >= 70).length;
+        const ignoredRumors = rumors.length - todayActions.rumorSuppressDone.length;
+
+        const dayRecord = {
+            day: this.gameState.day,
+            statusSnapshot: { ...status },
+            thresholdsSnapshot: { ...thresholds },
+            programs: {
+                used: programsUsed,
+                emergencyCount,
+                silentCount,
+                highPowerCount: highPowerPrograms
+            },
+            actions: {
+                broadcastDone: todayActions.broadcastDone,
+                qaCount: todayActions.qaDone,
+                repairCount: todayActions.repairDone.length,
+                rumorSuppressCount: todayActions.rumorSuppressDone.length
+            },
+            equipment: {
+                avgCondition: avgEquipmentCondition,
+                brokenCount: brokenEquipment,
+                unrepairedCount: unrepairedCount
+            },
+            rumors: {
+                activeCount: activeRumors,
+                highSeverityCount: highSeverityRumors,
+                ignoredCount: ignoredRumors
+            }
+        };
+
+        this.gameState.actionHistory.push(dayRecord);
+        if (this.gameState.actionHistory.length > 7) {
+            this.gameState.actionHistory.shift();
+        }
+    }
+
+    analyzeFailureCause(failureType) {
+        const recentActions = this.gameState.actionHistory.slice(-3);
+        const causes = [];
+        const evidence = [];
+
+        if (recentActions.length === 0) {
+            return { causes: ['游戏时间太短，无法进行详细分析。'], evidence: [] };
+        }
+
+        switch (failureType) {
+            case 'morale':
+                const ignoredRumorDays = recentActions.filter(d => d.rumors.ignoredCount > 0).length;
+                const emergencyOveruse = recentActions.filter(d => d.programs.emergencyCount >= 2).length;
+                const qaFailures = recentActions.filter(d => d.actions.qaCount < 2).length;
+                const lowPowerDays = recentActions.filter(d => d.statusSnapshot.power <= d.thresholdsSnapshot.power).length;
+                const foodShortage = recentActions.filter(d => this.gameState.settlementHistory.find(s => s.day === d.day)?.effects.food < 0).length;
+
+                if (ignoredRumorDays >= 2) {
+                    causes.push('连续忽略谣言传播');
+                    evidence.push(`近3天中有${ignoredRumorDays}天未及时处理谣言，导致民心持续下跌。`);
+                }
+                if (emergencyOveruse >= 1) {
+                    causes.push('过度使用紧急广播');
+                    evidence.push(`近3天中有${emergencyOveruse}天使用了2次以上紧急广播，造成听众恐慌。`);
+                }
+                if (qaFailures >= 2) {
+                    causes.push('听众问答互动不足');
+                    evidence.push(`近3天中有${qaFailures}天回答听众问题不足2次，缺乏与听众的互动。`);
+                }
+                if (lowPowerDays >= 2) {
+                    causes.push('电力供应长期不足');
+                    evidence.push(`近3天中有${lowPowerDays}天电力低于警戒线，影响了广播质量。`);
+                }
+                if (foodShortage >= 1) {
+                    causes.push('食物配给不足');
+                    evidence.push('曾出现食物短缺情况，导致幸存者健康受损，士气低落。');
+                }
+                if (this.gameState.thresholds.morale > 40) {
+                    causes.push('民心警戒线设置过高');
+                    evidence.push(`民心警戒线设置为${this.gameState.thresholds.morale}%，阈值过高导致惩罚效果过于频繁。`);
+                }
+                break;
+
+            case 'power':
+                const highPowerDays = recentActions.filter(d => d.programs.highPowerCount >= 2).length;
+                const noSilentDays = recentActions.filter(d => d.programs.silentCount === 0).length;
+                const generatorBad = recentActions.filter(d => {
+                    const gen = this.gameState.equipment.find(e => e.id === 'generator');
+                    return gen && gen.condition <= 40;
+                }).length;
+                const lowPowerThreshold = recentActions.filter(d => d.thresholdsSnapshot.power >= 40).length;
+
+                if (highPowerDays >= 2) {
+                    causes.push('高耗电节目使用过度');
+                    evidence.push(`近3天中有${highPowerDays}天使用了2个以上高耗电节目（电力≥10）。`);
+                }
+                if (noSilentDays >= 2) {
+                    causes.push('未合理安排静默时段');
+                    evidence.push(`近3天中有${noSilentDays}天完全没有安排静默时段来节省电力。`);
+                }
+                if (generatorBad >= 2) {
+                    causes.push('发电机长期失修');
+                    evidence.push(`近3天中有${generatorBad}天发电机状态低于40%，电力供应效率下降。`);
+                }
+                if (lowPowerThreshold >= 2) {
+                    causes.push('电力警戒线设置过高');
+                    evidence.push(`电力警戒线设置为${this.gameState.thresholds.power}%，阈值过高导致低电力惩罚频繁触发。`);
+                }
+                break;
+
+            case 'rumor':
+                const rumorIgnoredDays = recentActions.filter(d => d.rumors.ignoredCount >= 1).length;
+                const highRumorDays = recentActions.filter(d => d.statusSnapshot.rumor >= d.thresholdsSnapshot.rumor).length;
+                const noSuppressDays = recentActions.filter(d => d.actions.rumorSuppressCount === 0).length;
+                const rumorThresholdLow = recentActions.filter(d => d.thresholdsSnapshot.rumor <= 50).length;
+
+                if (rumorIgnoredDays >= 2) {
+                    causes.push('连续忽视谣言传播');
+                    evidence.push(`近3天中有${rumorIgnoredDays}天存在未处理的谣言，任其扩散。`);
+                }
+                if (highRumorDays >= 2) {
+                    causes.push('谣言值长期处于警戒线以上');
+                    evidence.push(`近3天中有${highRumorDays}天谣言值超过警戒线，造成大范围恐慌。`);
+                }
+                if (noSuppressDays >= 2) {
+                    causes.push('未采取任何谣言压制措施');
+                    evidence.push(`近3天中有${noSuppressDays}天完全没有发布澄清广播来压制谣言。`);
+                }
+                if (rumorThresholdLow >= 2) {
+                    causes.push('谣言警戒线设置过低');
+                    evidence.push(`谣言警戒线设置为${this.gameState.thresholds.rumor}%，阈值过低导致谣言惩罚过早触发。`);
+                }
+                break;
+
+            case 'equipment':
+                const noRepairDays = recentActions.filter(d => d.actions.repairCount === 0).length;
+                const brokenEquipmentDays = recentActions.filter(d => d.equipment.brokenCount >= 2).length;
+                const lowAvgCondition = recentActions.filter(d => d.equipment.avgCondition <= 40).length;
+                const manyUnrepaired = recentActions.filter(d => d.equipment.unrepairedCount >= 3).length;
+
+                if (noRepairDays >= 2) {
+                    causes.push('长期不进行设备维修');
+                    evidence.push(`近3天中有${noRepairDays}天完全没有进行任何设备维修工作。`);
+                }
+                if (brokenEquipmentDays >= 2) {
+                    causes.push('多台设备严重损坏');
+                    evidence.push(`近3天中有${brokenEquipmentDays}天有2台以上设备状态低于20%。`);
+                }
+                if (lowAvgCondition >= 2) {
+                    causes.push('设备整体状态持续恶化');
+                    evidence.push(`近3天中有${lowAvgCondition}天所有设备平均状态低于40%。`);
+                }
+                if (manyUnrepaired >= 2) {
+                    causes.push('待修设备积压过多');
+                    evidence.push(`近3天中有${manyUnrepaired}天有3台以上设备需要维修却未处理。`);
+                }
+                break;
+        }
+
+        if (causes.length === 0) {
+            causes.push('多种因素综合作用');
+            evidence.push('长期的管理不善最终导致了广播站的崩溃。');
+        }
+
+        return { causes, evidence };
+    }
+
+    checkGameOver() {
+        const { status, resources, equipment, thresholds } = this.gameState;
+
+        if (status.morale <= 0) {
+            return { type: 'morale', title: '民心崩溃', message: '广播站失去了所有听众的信任，人们不再相信你的广播，纷纷关闭了收音机...' };
+        }
+        if (status.power <= 0 && resources.battery <= 0) {
+            return { type: 'power', title: '电力耗尽', message: '所有电力来源都已耗尽，设备一台接一台地停止运转，广播站陷入了永恒的黑暗...' };
+        }
+        if (status.rumor >= 100 && status.rumor >= thresholds.rumor + 20) {
+            const recentRumorHigh = this.gameState.actionHistory.slice(-2).filter(d => d.statusSnapshot.rumor >= 90).length;
+            if (recentRumorHigh >= 1 || this.gameState.day > 5) {
+                return { type: 'rumor', title: '谣言失控', message: '各种谣言和阴谋论已经完全失控，听众们陷入疯狂的恐慌，再也没有人相信官方广播了...' };
+            }
+        }
+        const avgEquipmentCondition = equipment.reduce((sum, eq) => sum + eq.condition, 0) / equipment.length;
+        const criticalEquipment = equipment.filter(eq => eq.condition <= 10).length;
+        if (avgEquipmentCondition <= 15 && criticalEquipment >= 2) {
+            return { type: 'equipment', title: '设备瘫痪', message: '关键设备因长期缺乏维护而彻底损坏，广播信号戛然而止，广播站陷入死寂...' };
+        }
+
+        return null;
+    }
+
     endDay() {
         const dayEffects = {
             power: 0,
@@ -775,6 +1010,14 @@ class UndergroundRadioGame {
             summary: summary
         });
 
+        this.recordDailyActions();
+
+        const gameOverResult = this.checkGameOver();
+        if (gameOverResult) {
+            this.gameOver(gameOverResult.type, gameOverResult.title, gameOverResult.message);
+            return;
+        }
+
         this.showSettlementModal(dayEffects, summary);
 
         this.gameState.day++;
@@ -802,15 +1045,6 @@ class UndergroundRadioGame {
         }
         if (Math.random() < 0.2) {
             this.gameState.resources.food += Math.floor(Math.random() * 5) + 2;
-        }
-
-        if (this.gameState.status.morale <= 0) {
-            this.gameOver('民心崩溃', '广播站失去了所有听众的信任，人们不再相信你了...');
-            return;
-        }
-        if (this.gameState.status.power <= 0 && this.gameState.resources.battery <= 0) {
-            this.gameOver('电力耗尽', '所有电力来源都已耗尽，广播站陷入了黑暗...');
-            return;
         }
 
         this.renderAll();
@@ -848,9 +1082,99 @@ class UndergroundRadioGame {
         document.getElementById('eventModal').classList.remove('active');
     }
 
-    gameOver(title, message) {
+    gameOver(failureType, title, message) {
         this.gameState.gameOver = true;
-        this.showEvent(`游戏结束 - ${title}`, message + `\n你坚持了 ${this.gameState.day} 天。`, []);
         document.getElementById('endDayBtn').disabled = true;
+
+        const analysis = this.analyzeFailureCause(failureType);
+        const finalStatus = this.gameState.status;
+        const finalResources = this.gameState.resources;
+        const finalEquipment = this.gameState.equipment;
+        const finalThresholds = this.gameState.thresholds;
+
+        const causesHtml = analysis.causes.map(cause => 
+            `<div class="cause-item">⚠️ ${cause}</div>`
+        ).join('');
+
+        const evidenceHtml = analysis.evidence.map(evi => 
+            `<div class="evidence-item">📊 ${evi}</div>`
+        ).join('');
+
+        const statusHtml = `
+            <div class="snapshot-grid">
+                <div class="snapshot-item"><span class="snapshot-label">⚡ 电量</span><span class="snapshot-value ${finalStatus.power <= 20 ? 'danger' : ''}">${Math.round(finalStatus.power)}%</span></div>
+                <div class="snapshot-item"><span class="snapshot-label">🔊 噪声</span><span class="snapshot-value ${finalStatus.noise >= 70 ? 'danger' : ''}">${Math.round(finalStatus.noise)}%</span></div>
+                <div class="snapshot-item"><span class="snapshot-label">🗣️ 谣言</span><span class="snapshot-value ${finalStatus.rumor >= 70 ? 'danger' : ''}">${Math.round(finalStatus.rumor)}%</span></div>
+                <div class="snapshot-item"><span class="snapshot-label">😴 疲劳</span><span class="snapshot-value ${finalStatus.fatigue >= 70 ? 'danger' : ''}">${Math.round(finalStatus.fatigue)}%</span></div>
+                <div class="snapshot-item"><span class="snapshot-label">❤️ 民心</span><span class="snapshot-value ${finalStatus.morale <= 30 ? 'danger' : ''}">${Math.round(finalStatus.morale)}%</span></div>
+            </div>
+        `;
+
+        const resourcesHtml = `
+            <div class="snapshot-grid">
+                <div class="snapshot-item"><span class="snapshot-label">🍞 食物</span><span class="snapshot-value ${finalResources.food <= 5 ? 'danger' : ''}">${finalResources.food}</span></div>
+                <div class="snapshot-item"><span class="snapshot-label">🔋 电池</span><span class="snapshot-value ${finalResources.battery <= 2 ? 'danger' : ''}">${finalResources.battery}</span></div>
+                <div class="snapshot-item"><span class="snapshot-label">🔧 零件</span><span class="snapshot-value">${finalResources.parts}</span></div>
+                <div class="snapshot-item"><span class="snapshot-label">💊 药品</span><span class="snapshot-value">${finalResources.medicine}</span></div>
+            </div>
+        `;
+
+        const equipmentHtml = finalEquipment.map(eq => {
+            let conditionClass = '';
+            if (eq.condition <= 20) conditionClass = 'danger';
+            else if (eq.condition <= 50) conditionClass = 'warning';
+            return `<div class="snapshot-item"><span class="snapshot-label">${eq.name}</span><span class="snapshot-value ${conditionClass}">${eq.condition}%</span></div>`;
+        }).join('');
+
+        const thresholdsHtml = `
+            <div class="snapshot-grid">
+                <div class="snapshot-item"><span class="snapshot-label">⚡ 电量阈值</span><span class="snapshot-value">${finalThresholds.power}%</span></div>
+                <div class="snapshot-item"><span class="snapshot-label">🔊 噪声阈值</span><span class="snapshot-value">${finalThresholds.noise}%</span></div>
+                <div class="snapshot-item"><span class="snapshot-label">🗣️ 谣言阈值</span><span class="snapshot-value">${finalThresholds.rumor}%</span></div>
+                <div class="snapshot-item"><span class="snapshot-label">😴 疲劳阈值</span><span class="snapshot-value">${finalThresholds.fatigue}%</span></div>
+                <div class="snapshot-item"><span class="snapshot-label">❤️ 民心阈值</span><span class="snapshot-value">${finalThresholds.morale}%</span></div>
+            </div>
+        `;
+
+        const recentActionsHtml = this.gameState.actionHistory.slice(-3).map(day => {
+            const programs = day.programs.used.map(p => {
+                const prog = GameData.programTypes.find(pr => pr.id === p);
+                return prog ? prog.name : p;
+            }).join(', ') || '无';
+            
+            return `
+                <div class="history-day">
+                    <div class="history-day-title">第 ${day.day} 天</div>
+                    <div class="history-details">
+                        <div>📺 节目: ${programs}</div>
+                        <div>🔧 维修: ${day.actions.repairCount} 次 | 🚫 压制谣言: ${day.actions.rumorSuppressCount} 次</div>
+                        <div>❓ 问答: ${day.actions.qaCount} 次 | 📢 播报: ${day.actions.broadcastDone ? '是' : '否'}</div>
+                    </div>
+                </div>
+            `;
+        }).join('');
+
+        const failureIcons = {
+            morale: '💔',
+            power: '🔌',
+            rumor: '👻',
+            equipment: '⚙️'
+        };
+
+        const icon = failureIcons[failureType] || '💀';
+
+        document.getElementById('gameOverIcon').textContent = icon;
+        document.getElementById('gameOverTitle').textContent = title;
+        document.getElementById('gameOverMessage').textContent = message;
+        document.getElementById('gameOverDays').textContent = `你坚持了 ${this.gameState.day} 天`;
+        document.getElementById('gameOverCauses').innerHTML = causesHtml;
+        document.getElementById('gameOverEvidence').innerHTML = evidenceHtml;
+        document.getElementById('gameOverStatus').innerHTML = statusHtml;
+        document.getElementById('gameOverResources').innerHTML = resourcesHtml;
+        document.getElementById('gameOverEquipment').innerHTML = `<div class="snapshot-grid">${equipmentHtml}</div>`;
+        document.getElementById('gameOverThresholds').innerHTML = thresholdsHtml;
+        document.getElementById('gameOverRecentActions').innerHTML = recentActionsHtml || '<p style="color:#888; text-align:center">暂无历史记录</p>';
+
+        document.getElementById('gameOverModal').classList.add('active');
     }
 }

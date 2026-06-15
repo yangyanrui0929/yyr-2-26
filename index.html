@@ -238,6 +238,61 @@
                 <button id="modalCloseBtn" class="btn btn-primary">确定</button>
             </div>
         </div>
+
+        <div id="gameOverModal" class="modal game-over-modal">
+            <div class="modal-content game-over-content">
+                <div class="game-over-header">
+                    <div class="game-over-icon" id="gameOverIcon">💀</div>
+                    <h2 class="game-over-title" id="gameOverTitle">游戏结束</h2>
+                    <p class="game-over-days" id="gameOverDays">你坚持了 0 天</p>
+                </div>
+                
+                <div class="game-over-message" id="gameOverMessage">
+                    游戏结束信息
+                </div>
+
+                <div class="game-over-section">
+                    <h3>🔍 关键诱因</h3>
+                    <div class="causes-list" id="gameOverCauses"></div>
+                </div>
+
+                <div class="game-over-section">
+                    <h3>📋 行为分析</h3>
+                    <div class="evidence-list" id="gameOverEvidence"></div>
+                </div>
+
+                <div class="game-over-tabs">
+                    <button class="game-over-tab active" data-snapshot="status">📊 状态快照</button>
+                    <button class="game-over-tab" data-snapshot="resources">📦 物资</button>
+                    <button class="game-over-tab" data-snapshot="equipment">⚙️ 设备</button>
+                    <button class="game-over-tab" data-snapshot="thresholds">🎛️ 阈值</button>
+                    <button class="game-over-tab" data-snapshot="actions">📅 近期行动</button>
+                </div>
+
+                <div class="snapshot-content">
+                    <div class="snapshot-pane active" id="snapshot-status">
+                        <div id="gameOverStatus"></div>
+                    </div>
+                    <div class="snapshot-pane" id="snapshot-resources">
+                        <div id="gameOverResources"></div>
+                    </div>
+                    <div class="snapshot-pane" id="snapshot-equipment">
+                        <div id="gameOverEquipment"></div>
+                    </div>
+                    <div class="snapshot-pane" id="snapshot-thresholds">
+                        <div id="gameOverThresholds"></div>
+                    </div>
+                    <div class="snapshot-pane" id="snapshot-actions">
+                        <div class="recent-actions" id="gameOverRecentActions"></div>
+                    </div>
+                </div>
+
+                <div class="game-over-buttons">
+                    <button id="gameOverCloseBtn" class="btn btn-secondary">查看详情</button>
+                    <button id="gameOverRestartBtn" class="btn btn-primary">重新开始</button>
+                </div>
+            </div>
+        </div>
     </div>
 
     <script src="js/data.js"></script>
