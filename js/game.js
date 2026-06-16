@@ -540,13 +540,32 @@ class UndergroundRadioGame {
         const msg = GameData.broadcastMessages.find(m => m.id === this.gameState.selectedBroadcast);
         if (!msg || this.gameState.todayActions.broadcastDone) return;
 
-        if (this.gameState.status.power < msg.power) {
-            this.showEvent('电力不足', '电量不足，无法进行播报！', [{ text: '⚡电量不足', type: 'negative' }]);
-            return;
+        let powerNeeded = msg.power;
+        let batteriesUsed = 0;
+        
+        if (this.gameState.status.power < powerNeeded) {
+            const powerDeficit = powerNeeded - this.gameState.status.power;
+            const batteriesNeeded = Math.ceil(powerDeficit / 25);
+            
+            if (this.gameState.resources.battery >= batteriesNeeded) {
+                batteriesUsed = batteriesNeeded;
+                this.gameState.resources.battery -= batteriesUsed;
+                this.gameState.status.power += batteriesUsed * 25;
+                this.showEvent('🔋 使用电池补充电力', `使用了 ${batteriesUsed} 节电池补充电力，以完成播报。`, [
+                    { text: `🔋 电池 -${batteriesUsed}`, type: 'negative' },
+                    { text: `⚡ 电力 +${batteriesUsed * 25}`, type: 'positive' }
+                ]);
+            } else {
+                this.showEvent('电力不足', '电量和电池储备都不足，无法进行播报！', [
+                    { text: '⚡电量不足', type: 'negative' },
+                    { text: '🔋电池不足', type: 'negative' }
+                ]);
+                return;
+            }
         }
 
         this.applyEffects(msg.effects);
-        this.gameState.status.power -= msg.power;
+        this.gameState.status.power -= powerNeeded;
         this.gameState.todayActions.broadcastDone = true;
 
         const effectTags = Object.entries(msg.effects)
@@ -648,12 +667,31 @@ class UndergroundRadioGame {
         const rumor = this.gameState.rumors.find(r => r.id === rumorId);
         if (!rumor) return;
 
-        if (this.gameState.status.power < 8) {
-            this.showEvent('电力不足', '电量不足，无法发布澄清广播！', [{ text: '⚡电量不足', type: 'negative' }]);
-            return;
+        const powerNeeded = 8;
+        let batteriesUsed = 0;
+        
+        if (this.gameState.status.power < powerNeeded) {
+            const powerDeficit = powerNeeded - this.gameState.status.power;
+            const batteriesNeeded = Math.ceil(powerDeficit / 25);
+            
+            if (this.gameState.resources.battery >= batteriesNeeded) {
+                batteriesUsed = batteriesNeeded;
+                this.gameState.resources.battery -= batteriesUsed;
+                this.gameState.status.power += batteriesUsed * 25;
+                this.showEvent('🔋 使用电池补充电力', `使用了 ${batteriesUsed} 节电池补充电力，以发布澄清广播。`, [
+                    { text: `🔋 电池 -${batteriesUsed}`, type: 'negative' },
+                    { text: `⚡ 电力 +${batteriesUsed * 25}`, type: 'positive' }
+                ]);
+            } else {
+                this.showEvent('电力不足', '电量和电池储备都不足，无法发布澄清广播！', [
+                    { text: '⚡电量不足', type: 'negative' },
+                    { text: '🔋电池不足', type: 'negative' }
+                ]);
+                return;
+            }
         }
 
-        this.gameState.status.power -= 8;
+        this.gameState.status.power -= powerNeeded;
         rumor.severity -= 40;
         this.gameState.status.rumor -= 15;
         this.gameState.status.fatigue += 10;
@@ -732,6 +770,7 @@ class UndergroundRadioGame {
             day: this.gameState.day,
             statusSnapshot: { ...status },
             thresholdsSnapshot: { ...thresholds },
+            resourcesSnapshot: { ...this.gameState.resources },
             programs: {
                 used: programsUsed,
                 emergencyCount,
@@ -813,6 +852,15 @@ class UndergroundRadioGame {
                     return gen && gen.condition <= 40;
                 }).length;
                 const lowPowerThreshold = recentActions.filter(d => d.thresholdsSnapshot.power >= 40).length;
+                const batteryDrainedDays = recentActions.filter((d, i) => {
+                    if (i === 0) return false;
+                    const prev = recentActions[i - 1];
+                    return prev.resourcesSnapshot && d.resourcesSnapshot && 
+                           prev.resourcesSnapshot.battery > 0 && d.resourcesSnapshot.battery === 0;
+                }).length;
+                const lowBatteryDays = recentActions.filter(d => 
+                    d.resourcesSnapshot && d.resourcesSnapshot.battery <= 2
+                ).length;
 
                 if (highPowerDays >= 2) {
                     causes.push('高耗电节目使用过度');
@@ -825,6 +873,14 @@ class UndergroundRadioGame {
                 if (generatorBad >= 2) {
                     causes.push('发电机长期失修');
                     evidence.push(`近3天中有${generatorBad}天发电机状态低于40%，电力供应效率下降。`);
+                }
+                if (batteryDrainedDays >= 1) {
+                    causes.push('电池储备已耗尽');
+                    evidence.push('电池储备已完全耗尽，失去了最后的备用电力来源。');
+                }
+                if (lowBatteryDays >= 2) {
+                    causes.push('电池储备长期不足');
+                    evidence.push(`近3天中有${lowBatteryDays}天电池储备≤2节，未及时补充。`);
                 }
                 if (lowPowerThreshold >= 2) {
                     causes.push('电力警戒线设置过高');
@@ -998,6 +1054,18 @@ class UndergroundRadioGame {
                 this.gameState.status[k] = Math.max(0, Math.min(100, this.gameState.status[k] + v));
             }
         });
+
+        if (this.gameState.status.power <= 0 && this.gameState.resources.battery > 0) {
+            const batteriesUsed = Math.min(this.gameState.resources.battery, 3);
+            const powerRestored = batteriesUsed * 25;
+            this.gameState.resources.battery -= batteriesUsed;
+            this.gameState.status.power = Math.min(100, powerRestored);
+            dayEffects.power = (dayEffects.power || 0) + powerRestored;
+            this.showEvent('🔋 启用备用电源', `使用了 ${batteriesUsed} 节电池，恢复了 ${powerRestored} 点电力！`, [
+                { text: `🔋 电池 -${batteriesUsed}`, type: 'negative' },
+                { text: `⚡ 电力 +${powerRestored}`, type: 'positive' }
+            ]);
+        }
 
         let summary = '正常';
         if (this.gameState.status.morale <= 20) summary = '危急';
